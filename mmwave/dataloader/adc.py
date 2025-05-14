@@ -16,6 +16,7 @@ import struct
 from enum import Enum
 
 import numpy as np
+import time
 
 
 class CMD(Enum):
@@ -116,7 +117,7 @@ class DCA1000:
         self.packet_count = []
         self.byte_count = []
 
-        self.frame_buff = []
+        self.frame_buff = {}
 
         self.curr_buff = None
         self.last_frame = None
@@ -157,7 +158,7 @@ class DCA1000:
         self.config_socket.close()
 
     def read(self, timeout=1):
-        """ Read in a single packet via UDP
+        """ Read in a single frame via UDP
 
         Args:
             timeout (float): Time to wait for packet before moving on
@@ -236,6 +237,63 @@ class DCA1000:
         byte_count = struct.unpack('>Q', b'\x00\x00' + data[4:10][::-1])[0]
         packet_data = np.frombuffer(data[10:], dtype=np.uint16)
         return packet_num, byte_count, packet_data
+    
+    def _place_data_packet_in_frame_buffer(self, byte_count: int, payload: np.ndarray):
+        """Helper function to place one UDP packet at the correct position in the frame buffer
+        
+        Args:
+            byte_count (int):        cumulative Bytes before this payload (from DCA1000 header)
+            payload (np.ndarray):    uint16 from the UDP packet
+        
+        Returns:
+            (int, np.ndarray): Complete frame as a tuple of (frame_num, frame_data),
+                                (None, None) if no frame is complete yet
+        """
+
+        offset = byte_count // 2 # Absolute position in UDP packet stream
+        idx = 0                  # Read-index of payload
+        remaining = payload.size # Number of uint16 to process
+        completed = (None, None) # Tuple of (frame_id, frame_data) for complete captured frame
+
+        while remaining > 0:
+            # Determine which frame_id this data chunk belongs to
+            frame_id = offset // UINT16_IN_FRAME
+            # Determine which packet number this is within the frame
+            packet_num_within_frame = offset % UINT16_IN_FRAME
+            n_uint16_to_frame_end = UINT16_IN_FRAME - packet_num_within_frame
+
+            # Determine the size chunk of the data which is written to buffer
+            # (detect if the frame border is within this packet or not)
+            chunk_size = min(remaining, n_uint16_to_frame_end)
+
+            # Create buffer within frame_buff obj for this frame if neccessary
+            buf = self.frame_buff.setdefault(
+                frame_id,
+                {
+                    'data':   np.empty(UINT16_IN_FRAME, dtype=np.uint16),
+                    'filled': np.zeros(UINT16_IN_FRAME, dtype=bool),
+                    'first_seen': time.time()
+                }
+            )
+
+            # Write chunk to appropriate position in the frame's buffer
+            start   = packet_num_within_frame
+            end     = packet_num_within_frame + chunk_size
+            buf['data'][start:end]   = payload[idx:idx+chunk_size]
+            buf['filled'][start:end] = True
+
+            # If all packets for the frame have been read, add it to completed tuple
+            # (but do not return yet, as otherwise the rest of the packet data is lost)
+            if buf['filled'].all():
+                completed = (frame_id, buf['data'].copy())
+                del self.frame_buff[frame_id]
+
+            # Persist in helper vars that chunk has been read
+            offset    += chunk_size
+            idx       += chunk_size
+            remaining -= chunk_size
+        
+        return completed
 
     def _listen_for_error(self):
         """Helper function to try and read in for an error message from the FPGA
