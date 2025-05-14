@@ -170,34 +170,25 @@ class DCA1000:
         # Configure
         self.data_socket.settimeout(timeout)
 
-        # Frame buffer
-        ret_frame = np.zeros(UINT16_IN_FRAME, dtype=np.uint16)
-
-        # Wait for start of next frame
+        # Read packets until a full frame is read
         while True:
+            # Remove incomplete frames from frame buffer which exceed a timeout
+            dropped_frames = self._delete_incomplete_frames(timeout_seconds=0.2)
+            if dropped_frames:
+                ids = ", ".join(str(f) for f in dropped_frames)
+                print(f"WARNING: Dropped Frame(s) {ids} since they weren't complete.")
+            
+            # Read UDP packet
             packet_num, byte_count, packet_data = self._read_data_packet()
-            if byte_count % BYTES_IN_FRAME_CLIPPED == 0:
-                packets_read = 1
-                ret_frame[0:UINT16_IN_PACKET] = packet_data
-                break
 
-        # Read in the rest of the frame            
-        while True:
-            packet_num, byte_count, packet_data = self._read_data_packet()
-            packets_read += 1
+            # Place data from UDP packet in frame buffer
+            frame_num, frame_data = self._place_data_packet_in_frame_buffer(
+                byte_count=byte_count, 
+                payload=packet_data
+            )
 
-            if byte_count % BYTES_IN_FRAME_CLIPPED == 0:
-                self.lost_packets = PACKETS_IN_FRAME_CLIPPED - packets_read
-                return ret_frame
-
-            curr_idx = ((packet_num - 1) % PACKETS_IN_FRAME_CLIPPED)
-            try:
-                ret_frame[curr_idx * UINT16_IN_PACKET:(curr_idx + 1) * UINT16_IN_PACKET] = packet_data
-            except:
-                pass
-
-            if packets_read > PACKETS_IN_FRAME_CLIPPED:
-                packets_read = 0
+            if frame_data is not None:
+                return frame_data
 
     def _send_command(self, cmd, length='0000', body='', timeout=1):
         """Helper function to send a single commmand to the FPGA
