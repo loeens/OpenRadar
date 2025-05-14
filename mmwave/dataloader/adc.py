@@ -294,6 +294,25 @@ class DCA1000:
             remaining -= chunk_size
         
         return completed
+    
+    def _delete_incomplete_frames(self, timeout_seconds: float=0.2):
+        """Helper function to delete incomplete frames from frame buffer which exceed a given timeout
+
+        Args:
+            timeout_seconds (float): Time after which incomplete frames are deleted
+        
+        Returns:
+            List[int]: List of frame numbers which were deleted (can be empty)
+        """
+        now = time.time()
+        to_delete = []
+        for frame_number, buf in self.frame_buff.items():
+            if now - buf['first_seen'] > timeout_seconds:
+                to_delete.append(frame_number)
+        for frame_number in to_delete:
+            del self.frame_buff[frame_number]
+        
+        return to_delete
 
     def _listen_for_error(self):
         """Helper function to try and read in for an error message from the FPGA
