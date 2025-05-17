@@ -56,6 +56,7 @@ BYTES_IN_PACKET = 1456
 BYTES_IN_FRAME = (ADC_PARAMS['chirps'] * ADC_PARAMS['rx'] * ADC_PARAMS['tx'] *
                   ADC_PARAMS['IQ'] * ADC_PARAMS['samples'] * ADC_PARAMS['bytes'])
 UINT16_IN_FRAME = BYTES_IN_FRAME // 2
+DELETE_INCOMPLETE_FRAMES_AFTER_SECONDS = 0.2
 
 
 class DCA1000:
@@ -168,12 +169,6 @@ class DCA1000:
 
         # Read packets until a full frame is read
         while True:
-            # Remove incomplete frames from frame buffer which exceed a timeout
-            dropped_frames = self._delete_incomplete_frames(timeout_seconds=0.2)
-            if dropped_frames:
-                ids = ", ".join(str(f) for f in dropped_frames)
-                print(f"WARNING: Dropped Frame(s) {ids} since they weren't complete.")
-            
             # Read UDP packet
             packet_num, byte_count, packet_data = self._read_data_packet()
 
@@ -184,6 +179,12 @@ class DCA1000:
             )
 
             if frame_data is not None:
+                # Remove incomplete frames from frame buffer which exceed a timeout
+                dropped_frames = self._delete_incomplete_frames(timeout_seconds=DELETE_INCOMPLETE_FRAMES_AFTER_SECONDS)
+                if dropped_frames:
+                    ids = ", ".join(str(f) for f in dropped_frames)
+                    print(f"WARNING: Dropped Frame(s) {ids} since they weren't complete.")
+                # Return the complete frame
                 return frame_data
 
     def _send_command(self, cmd, length='0000', body='', timeout=1):
